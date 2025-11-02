@@ -1884,6 +1884,298 @@
 	}
 
 	/** Part 5 — Yahan khatam hua */
+		/**
+	 * Part 6 — Expenses Screen
+	 * (Expenses) (template) ko (mount) karta hai, (list) (fetch) karta hai, aur (CRUD) (handle) karta hai.
+	 */
+	function initExpenses() {
+		const tmpl = document.getElementById('rsam-tmpl-expenses');
+		if (!tmpl) {
+			showError('Expenses template not found.');
+			return;
+		}
+
+		// (Template) ko (mount) karein
+		const content = mountTemplate(tmpl);
+		state.ui.root.innerHTML = ''; // (Loading placeholder) ko (remove) karein
+		state.ui.root.appendChild(content);
+
+		// (UI Elements) ko (cache) karein
+		const ui = {
+			tableBody: state.ui.root.querySelector('#rsam-expenses-table-body'),
+			pagination: state.ui.root.querySelector(
+				'#rsam-expenses-pagination'
+			),
+			search: state.ui.root.querySelector('#rsam-expense-search'),
+			categoryFilter: state.ui.root.querySelector(
+				'#rsam-expense-category-filter'
+			),
+			dateFilter: state.ui.root.querySelector(
+				'#rsam-expense-date-filter'
+			),
+			addNewBtn: state.ui.root.querySelector('#rsam-add-new-expense'),
+			formContainer: state.ui.root.querySelector(
+				'#rsam-expense-form-container'
+			),
+		};
+		// (UI) ko (state) mein (store) karein
+		state.ui.expenses = ui;
+
+		// (Initial) (Expenses) (fetch) karein
+		fetchExpenses();
+
+		// (Event Listeners)
+		// (Filters)
+		ui.search.addEventListener('keyup', (e) => {
+			clearTimeout(state.searchTimer);
+			state.searchTimer = setTimeout(() => {
+				state.currentSearch = e.target.value;
+				state.currentPage = 1;
+				fetchExpenses();
+			}, 500);
+		});
+		ui.categoryFilter.addEventListener('change', () => {
+			state.currentPage = 1;
+			fetchExpenses();
+		});
+		ui.dateFilter.addEventListener('change', () => {
+			state.currentPage = 1;
+			fetchExpenses();
+		});
+
+		// (Add New)
+		ui.addNewBtn.addEventListener('click', () => {
+			openExpenseForm();
+		});
+	}
+
+	/**
+	 * (AJAX) ke zariye (Expenses) (fetch) aur (render) karta hai.
+	 */
+	async function fetchExpenses() {
+		const { tableBody, pagination, search, categoryFilter, dateFilter } =
+			state.ui.expenses;
+		if (!tableBody) return;
+
+		// (Loading) (state)
+		tableBody.innerHTML = `<tr>
+            <td colspan="5" class="rsam-list-loading">
+                <span class="rsam-loader-spinner"></span> ${rsamData.strings.loading}
+            </td>
+        </tr>`;
+
+		try {
+			const data = await wpAjax('rsam_get_expenses', {
+				page: state.currentPage,
+				search: search.value,
+				category: categoryFilter.value,
+				date: dateFilter.value,
+			});
+
+			// (Table) (render) karein
+			renderExpensesTable(data.expenses);
+			// (Pagination) (render) karein
+			renderPagination(
+				pagination,
+				data.pagination,
+				(newPage) => {
+					state.currentPage = newPage;
+					fetchExpenses();
+				}
+			);
+		} catch (error) {
+			showError(error, tableBody);
+		}
+	}
+
+	/**
+	 * (Expenses) (data) ko (table) mein (render) karta hai.
+	 * @param {Array} expenses (Expenses) ka (array)
+	 */
+	function renderExpensesTable(expenses) {
+		const { tableBody } = state.ui.expenses;
+		tableBody.innerHTML = ''; // (Clear) karein
+
+		if (!expenses || expenses.length === 0) {
+			tableBody.innerHTML = `<tr>
+                <td colspan="5" class="rsam-list-empty">
+                    ${rsamData.strings.noItemsFound}
+                </td>
+            </tr>`;
+			return;
+		}
+
+		expenses.forEach((expense) => {
+			const tr = document.createElement('tr');
+			tr.dataset.expenseId = expense.id;
+			// (expense) (object) ko (element) par (store) karein (edit) ke liye
+			tr.dataset.expenseData = JSON.stringify(expense);
+
+			tr.innerHTML = `
+                <td>${escapeHtml(expense.expense_date_formatted)}</td>
+                <td>${escapeHtml(expense.category_label)}</td>
+                <td>${escapeHtml(expense.amount_formatted)}</td>
+                <td>${escapeHtml(expense.description)}</td>
+                <td class="rsam-list-actions">
+                    <button type="button" class="button rsam-edit-btn" title="${rsamData.strings.edit}">
+                        <span class="dashicons dashicons-edit"></span>
+                    </button>
+                    <button type="button" class="button rsam-delete-btn" title="${rsamData.strings.delete}">
+                        <span class="dashicons dashicons-trash"></span>
+                    </button>
+                </td>
+            `;
+
+			// (Action Listeners)
+			tr.querySelector('.rsam-edit-btn').addEventListener(
+				'click',
+				(e) => {
+					const row = e.target.closest('tr');
+					const data = JSON.parse(row.dataset.expenseData);
+					openExpenseForm(data);
+				}
+			);
+
+			tr.querySelector('.rsam-delete-btn').addEventListener(
+				'click',
+				(e) => {
+					const row = e.target.closest('tr');
+					const expenseId = row.dataset.expenseId;
+					const expenseName = `${row.cells[1].textContent} - ${row.cells[2].textContent}`;
+					confirmDeleteExpense(expenseId, expenseName);
+				}
+			);
+
+			tableBody.appendChild(tr);
+		});
+	}
+
+	/**
+	 * (Add/Edit) (Expense) (Form Modal) ko kholta hai.
+	 * @param {object} [expenseData] (Edit) ke liye (Expense) ka (data)
+	 */
+	function openExpenseForm(expenseData = null) {
+		const { formContainer } = state.ui.expenses;
+		const formHtml = formContainer.innerHTML; // (Form) (HTML) ko (template) se (copy) karein
+		const isEditing = expenseData !== null;
+
+		const title = isEditing
+			? `${rsamData.strings.edit} Expense`
+			: `${rsamData.strings.addNew} Expense`;
+
+		// (Modal) kholne ke baad (form) ko (populate) karein
+		openModal(title, formHtml, async (e) => {
+			// (Save callback)
+			const saveBtn = e.target;
+			const form = state.ui.modal.body.querySelector('#rsam-expense-form');
+			if (form.checkValidity() === false) {
+				form.reportValidity();
+				return;
+			}
+
+			// (Form data) (serialize) karein
+			const formData = new URLSearchParams(new FormData(form)).toString();
+
+			try {
+				const result = await wpAjax(
+					'rsam_save_expense',
+					{ form_data: formData },
+					saveBtn
+				);
+				showToast(result.message, 'success');
+				closeModal();
+				fetchExpenses(); // (List) (refresh) karein
+			} catch (error) {
+				// (wpAjax) (toast) (show) kar dega
+			}
+		});
+
+		// (Modal) (elements) ko (find) karein
+		const form = state.ui.modal.body.querySelector('#rsam-expense-form');
+		const categorySelect = form.querySelector('#rsam-expense-category');
+		const employeeField = form.querySelector('#rsam-expense-employee-field');
+		const employeeSelect = form.querySelector(
+			'#rsam-expense-employee-id'
+		);
+
+		// (Dynamic field) (Salary) (category) ke liye
+		categorySelect.addEventListener('change', (e) => {
+			if (e.target.value === 'salary') {
+				employeeField.style.display = 'block';
+				employeeSelect.required = true;
+				loadEmployeesIntoSelect(employeeSelect); // (Employees) (load) karein
+			} else {
+				employeeField.style.display = 'none';
+				employeeSelect.required = false;
+			}
+		});
+
+		// (Modal) khulne ke baad (form) ko (populate) karein
+		if (isEditing) {
+			form.querySelector('[name="expense_id"]').value = expenseData.id;
+			form.querySelector('[name="expense_date"]').value =
+				expenseData.expense_date;
+			form.querySelector('[name="amount"]').value = expenseData.amount;
+			form.querySelector('[name="category"]').value =
+				expenseData.category;
+			form.querySelector('[name="description"]').value =
+				expenseData.description;
+
+			// (Salary) (category) (logic)
+			if (expenseData.category === 'salary') {
+				employeeField.style.display = 'block';
+				employeeSelect.required = true;
+				// (Employees) (load) karein aur (saved) (value) (select) karein
+				loadEmployeesIntoSelect(
+					employeeSelect,
+					expenseData.employee_id
+				);
+			}
+		} else {
+			// (New) (form) mein (date) (default) (today) (set) karein
+			form.querySelector('[name="expense_date"]').value =
+				new Date().toISOString().split('T')[0];
+		}
+	}
+
+	/**
+	 * (Employees) ko (AJAX) se (load) karke (select) (dropdown) mein (populate) karta hai.
+	 * @param {HTMLSelectElement} selectEl (Dropdown element)
+	 * @param {string|number} [selectedValue] (Select) karne ke liye (ID)
+	 */
+	async function loadEmployeesIntoSelect(selectEl, selectedValue = null) {
+		// (Check) karein agar pehle se (loaded) hain (sirf 'Select Employee' (option) ke alawa)
+		if (selectEl.options.length > 1) {
+			if (selectedValue) {
+				selectEl.value = selectedValue;
+			}
+			return;
+		}
+
+		try {
+			const data = await wpAjax('rsam_get_employees', {
+				limit: -1, // Tamam (active) (employees) (backend ko yeh (handle) karna chahiye)
+			});
+
+			data.employees.forEach((emp) => {
+				// Sirf (active) (employees) dikhayein
+				if (Number(emp.is_active) === 1) {
+					const option = document.createElement('option');
+					option.value = emp.id;
+					option.textContent = escapeHtml(emp.name);
+					if (selectedValue && emp.id == selectedValue) {
+						option.selected = true;
+					}
+					selectEl.appendChild(option);
+				}
+			});
+		} catch (error) {
+			console.error('Failed to load employees for dropdown:', error);
+		}
+	}
+
+	/**
+	 * (Expense) ko (delete) karne ke liye (confirmation)
 
 	/** Part 1 — Yahan khatam hua */
 })(); // (IIFE) (close)

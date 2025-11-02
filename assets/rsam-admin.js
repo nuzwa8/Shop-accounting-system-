@@ -3431,7 +3431,107 @@
 	}
 
 	/** Part 10 — Yahan khatam hua */
-		
+		/**
+	 * Part 11 — Settings Screen
+	 * (Settings) (form) ko (load) aur (save) karta hai.
+	 */
+	function initSettings() {
+		const tmpl = document.getElementById('rsam-tmpl-settings');
+		if (!tmpl) {
+			showError('Settings template not found.');
+			return;
+		}
+
+		// (Template) ko (mount) karein
+		const content = mountTemplate(tmpl);
+		state.ui.root.innerHTML = ''; // (Loading placeholder) ko (remove) karein
+		state.ui.root.appendChild(content);
+
+		// (UI Elements) ko (cache) karein
+		const ui = {
+			form: state.ui.root.querySelector('#rsam-settings-form'),
+			loader: state.ui.root.querySelector('#rsam-settings-loader'),
+			fields: state.ui.root.querySelector('#rsam-settings-fields'),
+			saveBtn: state.ui.root.querySelector('#rsam-save-settings-form'),
+		};
+		// (UI) ko (state) mein (store) karein
+		state.ui.settings = ui;
+
+		// (Event Listeners)
+		ui.form.addEventListener('submit', (e) => {
+			e.preventDefault();
+			saveSettings();
+		});
+
+		// (Settings) (load) karein
+		loadSettings();
+	}
+
+	/**
+	 * (AJAX) ke zariye (settings) (load) karta hai aur (form) ko (populate) karta hai.
+	 */
+	async function loadSettings() {
+		const { form, loader, fields } = state.ui.settings;
+		loader.style.display = 'block';
+		fields.style.display = 'none';
+
+		try {
+			const settings = await wpAjax('rsam_get_settings');
+
+			// (Form fields) ko (populate) karein
+			form.querySelector('[name="shop_name"]').value =
+				settings.shop_name || '';
+			form.querySelector('[name="currency_symbol"]').value =
+				settings.currency_symbol || 'Rs.';
+
+			// (Checkboxes)
+			form.querySelector('[name="enable_low_stock_alerts"]').checked =
+				!!Number(settings.enable_low_stock_alerts);
+			// form.querySelector('[name="enable_gst"]').checked = !!Number(settings.enable_gst);
+
+			loader.style.display = 'none';
+			fields.style.display = 'block';
+		} catch (error) {
+			showError(error, loader);
+		}
+	}
+
+	/**
+	 * (Settings) ko (AJAX) ke zariye (save) karta hai.
+	 */
+	async function saveSettings() {
+		const { form, saveBtn } = state.ui.settings;
+
+		if (form.checkValidity() === false) {
+			form.reportValidity();
+			return;
+		}
+
+		// (Form data) (serialize) karein
+		const formData = new URLSearchParams(new FormData(form)).toString();
+
+		try {
+			const result = await wpAjax(
+				'rsam_save_settings',
+				{ form_data: formData },
+				saveBtn
+			);
+			showToast(result.message, 'success');
+		} catch (error) {
+			// (wpAjax) (toast) (show) kar dega
+		}
+	}
+
+	/** Part 11 — Yahan khatam hua */
+
+	/**
+	 * ===================================================================
+	 * === PHASE 2 (JavaScript) MUKAMMAL HUA (COMPLETED) ===
+	 * ===================================================================
+	 * Hum ne tamam (screens) ke liye (JavaScript) (logic) mukammal kar liya hai.
+	 * ===================================================================
+	 */
+})(); // (IIFE) (FINALLY CLOSED)
 		
 		
 	/** Part 1 — Yahan khatam hua */

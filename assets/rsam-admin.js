@@ -854,7 +854,502 @@
 	}
 
 	/** Part 3 — Yahan khatam hua */
-  
+  /**
+	 * Part 4 — Purchases Screen
+	 * (Purchases) (list) aur (form) (views) ko (handle) karta hai.
+	 */
+	function initPurchases() {
+		const tmpl = document.getElementById('rsam-tmpl-purchases');
+		if (!tmpl) {
+			showError('Purchases template not found.');
+			return;
+		}
+
+		// (Template) ko (mount) karein
+		const content = mountTemplate(tmpl);
+		state.ui.root.innerHTML = ''; // (Loading placeholder) ko (remove) karein
+		state.ui.root.appendChild(content);
+
+		// (UI Elements) ko (cache) karein
+		const ui = {
+			// (List View)
+			listView: state.ui.root.querySelector('#rsam-purchase-list-view'),
+			tableBody: state.ui.root.querySelector('#rsam-purchases-table-body'),
+			pagination: state.ui.root.querySelector(
+				'#rsam-purchases-pagination'
+			),
+			search: state.ui.root.querySelector('#rsam-purchase-search'),
+			addNewBtn: state.ui.root.querySelector('#rsam-add-new-purchase'),
+
+			// (Form View)
+			formView: state.ui.root.querySelector('#rsam-purchase-form-view'),
+			form: state.ui.root.querySelector('#rsam-purchase-form'),
+			formTitle: state.ui.root.querySelector('#rsam-purchase-form-title'),
+			backBtn: state.ui.root.querySelector('#rsam-back-to-purchase-list'),
+			saveBtn: state.ui.root.querySelector('#rsam-save-purchase-form'),
+			cancelBtn: state.ui.root.querySelector('#rsam-cancel-purchase-form'),
+
+			// (Form Fields)
+			productSearch: state.ui.root.querySelector(
+				'#rsam-purchase-product-search'
+			),
+			itemsTableBody: state.ui.root.querySelector(
+				'#rsam-purchase-items-body'
+			),
+			subtotalField: state.ui.root.querySelector(
+				'#rsam-purchase-subtotal'
+			),
+			additionalCostsField: state.ui.root.querySelector(
+				'#rsam-purchase-additional-costs'
+			),
+			totalAmountField: state.ui.root.querySelector(
+				'#rsam-purchase-total-amount'
+			),
+			supplierSearch: state.ui.root.querySelector(
+				'#rsam-purchase-supplier'
+			),
+			quickAddSupplierBtn: state.ui.root.querySelector(
+				'.rsam-quick-add[data-type="supplier"]'
+			),
+		};
+		// (UI) ko (state) mein (store) karein
+		state.ui.purchases = ui;
+		// (Items) ko (track) karne ke liye (array)
+		state.purchaseItems = [];
+
+		// (Initial) (Purchases) (fetch) karein
+		fetchPurchases();
+
+		// (Event Listeners)
+		// (View Switching)
+		ui.addNewBtn.addEventListener('click', () => {
+			showPurchaseView('form');
+		});
+		ui.backBtn.addEventListener('click', () => {
+			showPurchaseView('list');
+		});
+		ui.cancelBtn.addEventListener('click', () => {
+			showPurchaseView('list');
+		});
+
+		// (List Search)
+		ui.search.addEventListener('keyup', (e) => {
+			clearTimeout(state.searchTimer);
+			state.searchTimer = setTimeout(() => {
+				state.currentSearch = e.target.value;
+				state.currentPage = 1;
+				fetchPurchases();
+			}, 500);
+		});
+
+		// (Form Handling)
+		setupProductAutocomplete(ui.productSearch, addProductToPurchase);
+		initSupplierSearch(ui.supplierSearch, ui.quickAddSupplierBtn);
+
+		// (Costs) (Calculation)
+		ui.additionalCostsField.addEventListener('input', () => {
+			calculatePurchaseTotals();
+		});
+
+		// (Save Purchase)
+		ui.form.addEventListener('submit', (e) => {
+			e.preventDefault();
+			savePurchase();
+		});
+	}
+
+	/**
+	 * (Purchase List) aur (Form) ke darmiyan (view) (switch) karta hai.
+	 * @param {'list'|'form'} view Dikhane wala (view)
+	 * @param {object} [purchaseData] (Edit) ke liye (data) (abhi (unsupported) hai)
+	 */
+	function showPurchaseView(view, purchaseData = null) {
+		const { listView, formView, form, formTitle } = state.ui.purchases;
+
+		if (view === 'form') {
+			listView.style.display = 'none';
+			formView.style.display = 'block';
+
+			// (Form) (Reset) karein
+			form.reset();
+			state.purchaseItems = [];
+			renderPurchaseItems();
+			calculatePurchaseTotals();
+
+			if (purchaseData) {
+				// (Edit) (Mode) - (Future implementation)
+				formTitle.textContent =
+					rsamData.strings.editPurchase || 'Edit Purchase';
+				// (Form) (populate) karein
+				// ...
+			} else {
+				// (New) (Mode)
+				formTitle.textContent =
+					rsamData.strings.newPurchase || 'Record New Purchase';
+				// (Purchase date) ko (today) (set) karein
+				form.querySelector('[name="purchase_date"]').value =
+					new Date().toISOString().split('T')[0];
+			}
+		} else {
+			// (List) (View)
+			formView.style.display = 'none';
+			listView.style.display = 'block';
+		}
+	}
+
+	/**
+	 * (AJAX) ke zariye (Purchases) (fetch) aur (render) karta hai.
+	 */
+	async function fetchPurchases() {
+		const { tableBody, pagination } = state.ui.purchases;
+		if (!tableBody) return;
+
+		tableBody.innerHTML = `<tr>
+            <td colspan="5" class="rsam-list-loading">
+                <span class="rsam-loader-spinner"></span> ${rsamData.strings.loading}
+            </td>
+        </tr>`;
+
+		try {
+			const data = await wpAjax('rsam_get_purchases', {
+				page: state.currentPage,
+				search: state.currentSearch,
+			});
+
+			renderPurchasesTable(data.purchases);
+			renderPagination(
+				pagination,
+				data.pagination,
+				(newPage) => {
+					state.currentPage = newPage;
+					fetchPurchases();
+				}
+			);
+		} catch (error) {
+			showError(error, tableBody);
+		}
+	}
+
+	/**
+	 * (Purchases) (data) ko (table) mein (render) karta hai.
+	 * @param {Array} purchases (Purchases) ka (array)
+	 */
+	function renderPurchasesTable(purchases) {
+		const { tableBody } = state.ui.purchases;
+		tableBody.innerHTML = '';
+
+		if (!purchases || purchases.length === 0) {
+			tableBody.innerHTML = `<tr>
+                <td colspan="5" class="rsam-list-empty">
+                    ${rsamData.strings.noItemsFound}
+                </td>
+            </tr>`;
+			return;
+		}
+
+		purchases.forEach((purchase) => {
+			const tr = document.createElement('tr');
+			tr.dataset.purchaseId = purchase.id;
+			tr.innerHTML = `
+                <td>${escapeHtml(
+					purchase.invoice_number || `Purchase #${purchase.id}`
+				)}</td>
+                <td>${escapeHtml(purchase.supplier_name)}</td>
+                <td>${escapeHtml(purchase.purchase_date_formatted)}</td>
+                <td>${escapeHtml(purchase.total_amount_formatted)}</td>
+                <td class="rsam-list-actions">
+                    <button type="button" class="button rsam-delete-btn" title="${rsamData.strings.delete}">
+                        <span class="dashicons dashicons-trash"></span>
+                    </button>
+                    <button type="button" class="button rsam-edit-btn" title="${rsamData.strings.edit}" disabled>
+                        <span class="dashicons dashicons-edit"></span>
+                    </button>
+                </td>
+            `;
+
+			// (Delete) (Listener)
+			tr.querySelector('.rsam-delete-btn').addEventListener(
+				'click',
+				(e) => {
+					const row = e.target.closest('tr');
+					const purchaseId = row.dataset.purchaseId;
+					const purchaseName =
+						row.cells[0].textContent || `Purchase #${purchaseId}`;
+					confirmDeletePurchase(purchaseId, purchaseName);
+				}
+			);
+
+			tableBody.appendChild(tr);
+		});
+	}
+
+	/**
+	 * (Purchase) ko (delete) karne ke liye (confirmation) (prompt) dikhata hai.
+	 * @param {string|number} purchaseId
+	 * @param {string} purchaseName
+	 */
+	function confirmDeletePurchase(purchaseId, purchaseName) {
+		const title = `${rsamData.strings.delete} ${purchaseName}?`;
+		const message = `Are you sure you want to delete "${purchaseName}"? This will reverse the stock quantities if they were not sold. This action cannot be undone.`;
+
+		openConfirmModal(title, message, async (e) => {
+			const deleteBtn = e.target;
+			try {
+				const result = await wpAjax(
+					'rsam_delete_purchase',
+					{ purchase_id: purchaseId },
+					deleteBtn
+				);
+				showToast(result.message, 'success');
+				closeConfirmModal();
+				fetchPurchases(); // (List) (refresh) karein
+			} catch (error) {
+				// (wpAjax) (toast) (show) kar dega
+				closeConfirmModal();
+			}
+		});
+	}
+
+	/**
+	 * (Product Search) (Autocomplete) ko (setup) karta hai.
+	 * @param {HTMLElement} inputEl (Input element)
+	 * @param {function} callback (Product) (select) hone par (callback)
+	 */
+	function setupProductAutocomplete(inputEl, callback) {
+		if (!window.jQuery.fn.autocomplete) {
+			console.error('jQuery UI Autocomplete is not loaded.');
+			return;
+		}
+
+		window
+			.jQuery(inputEl)
+			.autocomplete({
+				source: (request, response) => {
+					// (WordPress AJAX) (autocomplete) ke liye
+					window
+						.jQuery
+						.get(rsamData.ajax_url, {
+							action: 'rsam_search_products',
+							nonce: rsamData.nonce,
+							term: request.term,
+						})
+						.done((data) => {
+							if (data.success) {
+								response(data.data);
+							} else {
+								response([]);
+							}
+						});
+				},
+				minLength: 2,
+				select: (event, ui) => {
+					event.preventDefault(); // (Default) (value) (set) karne se rokein
+					callback(ui.item.data); // (Pura product object) (callback) ko (pass) karein
+					inputEl.value = ''; // (Input) (clear) karein
+				},
+			})
+			.autocomplete('instance')._renderItem = (ul, item) => {
+			// (Custom) (list item) (render) karein
+			return window
+				.jQuery('<li>')
+				.append(`<div>${escapeHtml(item.label)}</div>`)
+				.appendTo(ul);
+		};
+	}
+
+	/**
+	 * (Purchase form) mein (product) (add) karta hai.
+	 * @param {object} product (Product) (data) (autocomplete se)
+	 */
+	function addProductToPurchase(product) {
+		// Check karein ke (product) pehle se (list) mein to nahi
+		const existingItem = state.purchaseItems.find(
+			(item) => item.product_id === product.id
+		);
+		if (existingItem) {
+			showToast('Product is already in the list.', 'warning');
+			// (Quantity) (highlight) kar sakte hain
+			const row = state.ui.purchases.itemsTableBody.querySelector(
+				`tr[data-product-id="${product.id}"] input[name="quantity"]`
+			);
+			if (row) {
+				row.focus();
+				row.select();
+			}
+			return;
+		}
+
+		// Naya (item) (state) mein (add) karein
+		state.purchaseItems.push({
+			product_id: product.id,
+			name: product.name,
+			unit_type: product.unit_type,
+			has_expiry: !!Number(product.has_expiry),
+			quantity: 1,
+			purchase_price: 0.0, // (User) (enter) karega
+			expiry_date: '',
+		});
+
+		// (Table) (Re-render) karein
+		renderPurchaseItems();
+	}
+
+	/**
+	 * (Purchase form) mein (items) (table) ko (render) karta hai.
+	 */
+	function renderPurchaseItems() {
+		const { itemsTableBody } = state.ui.purchases;
+		itemsTableBody.innerHTML = ''; // (Clear) karein
+
+		if (state.purchaseItems.length === 0) {
+			itemsTableBody.innerHTML = `<tr class="rsam-no-items-row">
+                <td colspan="6">${rsamData.strings.noItemsFound}</td>
+            </tr>`;
+			return;
+		}
+
+		state.purchaseItems.forEach((item, index) => {
+			const tr = document.createElement('tr');
+			tr.dataset.productId = item.product_id;
+			tr.dataset.index = index;
+
+			tr.innerHTML = `
+                <td>${escapeHtml(item.name)} (${escapeHtml(item.unit_type)})</td>
+                <td>
+                    <input type="number" name="quantity" class="rsam-input-small" value="${escapeHtml(
+						item.quantity
+					)}" step="0.01" min="0.01" required>
+                </td>
+                <td>
+                    <input type="number" name="purchase_price" class="rsam-input-small" value="${escapeHtml(
+						item.purchase_price
+					)}" step="0.01" min="0" required>
+                </td>
+                <td>
+                    <input type="date" name="expiry_date" ${
+						item.has_expiry ? '' : 'disabled'
+					}>
+                </td>
+                <td class="rsam-item-subtotal">
+                    ${formatPrice(item.quantity * item.purchase_price)}
+                </td>
+                <td>
+                    <button type="button" class="button rsam-delete-btn rsam-item-remove" title="${rsamData.strings.delete}">
+                        <span class="dashicons dashicons-no-alt"></span>
+                    </button>
+                </td>
+            `;
+
+			// (Input) (change) (listeners) (state) ko (update) karne ke liye
+			tr.querySelector('input[name="quantity"]').addEventListener(
+				'input',
+				(e) => {
+					const newQty = parseFloat(e.target.value) || 0;
+					state.purchaseItems[index].quantity = newQty;
+					calculatePurchaseTotals(); // (Totals) (re-calculate) karein
+					// (Row) (subtotal) (update) karein
+					tr.querySelector('.rsam-item-subtotal').textContent =
+						formatPrice(
+							newQty * state.purchaseItems[index].purchase_price
+						);
+				}
+			);
+			tr.querySelector('input[name="purchase_price"]').addEventListener(
+				'input',
+				(e) => {
+					const newPrice = parseFloat(e.target.value) || 0;
+					state.purchaseItems[index].purchase_price = newPrice;
+					calculatePurchaseTotals();
+					tr.querySelector('.rsam-item-subtotal').textContent =
+						formatPrice(
+							newPrice * state.purchaseItems[index].quantity
+						);
+				}
+			);
+			tr.querySelector('input[name="expiry_date"]').addEventListener(
+				'input',
+				(e) => {
+					state.purchaseItems[index].expiry_date = e.target.value;
+				}
+			);
+
+			// (Remove) (button)
+			tr.querySelector('.rsam-item-remove').addEventListener(
+				'click',
+				() => {
+					state.purchaseItems.splice(index, 1); // (Array) se (remove) karein
+					renderPurchaseItems(); // (List) (re-render) karein
+					calculatePurchaseTotals();
+				}
+			);
+
+			itemsTableBody.appendChild(tr);
+		});
+	}
+
+	/**
+	 * (Purchase form) mein (Subtotal) aur (Total Amount) (calculate) karta hai.
+	 */
+	function calculatePurchaseTotals() {
+		const { subtotalField, additionalCostsField, totalAmountField } =
+			state.ui.purchases;
+
+		// (Items) (subtotal) (calculate) karein
+		const subtotal = state.purchaseItems.reduce((total, item) => {
+			return total + item.quantity * item.purchase_price;
+		}, 0);
+
+		const additionalCosts =
+			parseFloat(additionalCostsField.value) || 0;
+		const totalAmount = subtotal + additionalCosts;
+
+		subtotalField.value = formatPrice(subtotal);
+		totalAmountField.value = formatPrice(totalAmount);
+	}
+
+	/**
+	 * Nayi (Purchase) ko (AJAX) ke zariye (save) karta hai.
+	 */
+	async function savePurchase() {
+		const { form, saveBtn } = state.ui.purchases;
+
+		if (form.checkValidity() === false) {
+			form.reportValidity();
+			showToast(rsamData.strings.invalidInput, 'error');
+			return;
+		}
+
+		if (state.purchaseItems.length === 0) {
+			showToast('Please add at least one product to the purchase.', 'error');
+			return;
+		}
+
+		// (Form) (data) (object) banayein
+		const formData = new FormData(form);
+		const data = {};
+		formData.forEach((value, key) => (data[key] = value));
+
+		// (Items) ko (JSON string) mein (convert) karein
+		data.items = JSON.stringify(state.purchaseItems);
+		
+		// (Prices) ko (unformat) karein (agar zaroorat ho, lekin hum (state) se le rahe hain)
+		data.subtotal = state.purchaseItems.reduce(
+			(total, item) => total + item.quantity * item.purchase_price,
+			0
+		);
+		data.additional_costs =
+			parseFloat(form.querySelector('[name="additional_costs"]').value) ||
+			0;
+		data.total_amount = data.subtotal + data.additional_costs;
+
+		try {
+			const result = await wpAjax('rsam_save_purchase', data, saveBtn);
+			showToast(result.message, 'success');
+			showPurchaseView('list'); // (List) (view) par wapis jayein
+			fetchPurchases(); // (List) (refresh) karein
+		} catch (error) {
+			// (wpAjax) (toast) (show) kar dega
+		}
 
   
 
